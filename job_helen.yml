@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Prefix name of job with user and timestamp
+  name: kishwar_helen
+spec:
+  backoffLimit: 0
+  # Delete the log after a minute
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      containers:
+      - name: helen
+        image: kishwars/helen:0.0.1.cpu
+        imagePullPolicy: Always
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          DEBIAN_FRONTEND=noninteractive apt-get update -qq -y && DEBIAN_FRONTEND=noninteractive apt-get install -qq -y awscli
+          ls ~/.aws/
+          cat ~/.aws/credentials
+          aws s3 cp s3://lc2019/guppy_3.0.5_bacterial/shasta/Saccharomyces_cerevisiae.shasta.fasta .
+          aws s3 cp Saccharomyces_cerevisiae.shasta.fasta s3://marina-misc/kishwar_test/
+        volumeMounts:
+        - mountPath: /scratch
+          name: scratch-volume
+        - mountPath: /root/.aws
+          name: s3-credentials
+          readOnly: true
+        resources:
+          requests:
+            cpu: "1"
+            memory: "1G"
+            ephemeral-storage: "2M"
+          limits:
+            cpu: "2"
+            memory: "2G"
+            ephemeral-storage: "4M"
+        # command: ["/bin/bash", "-c"]
+        # args: ['for i in {1..10}; do echo "$i: $(date)"; i=$((i+1)); sleep 1; done']
+
+        # command: ["python3", "/opt/helen/call_consensus.py"]
+        # args: ["-h"]
+      restartPolicy: Never
+      volumes:
+      - name: scratch-volume
+        emptyDir: {}
+      - name: s3-credentials
+        secret:
+          secretName: kube-s3-credentials

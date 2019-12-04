@@ -1,0 +1,95 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Prefix name of job with user and timestamp
+  name: kishwar-pepper
+spec:
+  backoffLimit: 0
+  # Delete the log after a minute
+  ttlSecondsAfterFinished: 10
+  template:
+    spec:
+      containers:
+      - name: pepper
+        image: kishwars/pepper:0.1.cpu
+        imagePullPolicy: Always
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          # ADAM TOLD US ABOUT THIS SOLUTION TO AVOID DNS RESOLUTION
+          # echo "nameserver 1.1.1.1" > /etc/resolv.conf
+          DEBIAN_FRONTEND=noninteractive apt-get update -qq -y && DEBIAN_FRONTEND=noninteractive apt-get install -qq -y awscli
+
+          # DOWNLOAD ALL INPUTS FROM AWS OR GCP
+          aws s3 cp s3://lc2019/align/HG00733_g305/HG00733.shasta.g305.bam .
+          aws s3 cp s3://lc2019/align/HG00733_g305/HG00733.shasta.g305.bam.bai .
+          aws s3 cp s3://lc2019/shasta/HG00733_g305/HG00733.shasta.g305.fasta .
+
+          # INDEX THE FASTA FILE, I INSTALLED SAMTOOLS IN THE DOCKER
+          /opt/samtools-1.9/samtools faidx HG00733.shasta.g305.fasta
+
+          # CREATE OUTPUT DIRECTORY FOR IMAGE OUTPUTS
+          mkdir pepper_image_outputs
+
+          # RUN PEPPER IMAGE GENERATION
+          time python3 /opt/pepper/1_pepper_make_images.py \
+          -b HG00733.shasta.g305.bam \
+          -d HG00733.shasta.g305.fasta \
+          -o ./pepper_image_outputs/ \
+          -t 72
+
+          # UPLOAD ALL THE IMAGES TO AWS
+          timestamp=$(date +%m%d%Y_%H%M%S)
+          aws s3 cp --recursive pepper_image_outputs s3://kishwar-k8s/pepper_outputs/pepper_images_HG00733_guppy305_$timestamp/
+
+
+          # mkdir pepper_inference_outputs
+
+          # python3 /opt/pepper/2_pepper_call_consensus.py \
+          # -i ./pepper_image_outputs/ \
+          # -m /opt/pepper/models/PromethION_r941_guppy305_HAC_microbial.pkl \
+          # -b 64 \
+          # -w 4 \
+          # -t 64 \
+          # -o ./pepper_inference_outputs/
+
+          # RUN STITCH
+          # time python3 /opt/pepper/3_pepper_stitch.py \
+          # -i ./pepper_inference_outputs/pepper_predictions.hdf \
+          # -o ./pepper_inference_outputs/ \
+          # -t 72
+
+          # cd pepper_inference_outputs
+          # ls
+          # cd ..
+          # aws s3 cp ./pepper_inference_outputs/consensus.fa s3://kishwar-k8s/pepper_outputs/pepper_$timestamp/staph_aur_g305_shasta_pepper_$timestamp.fa
+
+        volumeMounts:
+        - mountPath: /scratch
+          name: scratch-volume
+        - mountPath: /root/.aws
+          name: s3-credentials
+          readOnly: true
+        resources:
+          requests:
+            cpu: "72"
+            memory: "256G"
+            ephemeral-storage: "512G"
+          limits:
+            cpu: "72"
+            memory: "256G"
+            ephemeral-storage: "512G"
+        # command: ["/bin/bash", "-c"]
+        # args: ['for i in {1..10}; do echo "$i: $(date)"; i=$((i+1)); sleep 1; done']
+
+        # command: ["python3", "/opt/helen/call_consensus.py"]
+        # args: ["-h"]
+      restartPolicy: Never
+      volumes:
+      - name: scratch-volume
+        emptyDir: {}
+      - name: s3-credentials
+        secret:
+          secretName: kube-s3-credentials
